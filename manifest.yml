@@ -1,0 +1,10 @@
+---
+
+applications:
+- name: btp-mcp-server
+  random-route: true
+  memory: 128M
+  buildpacks:
+  - nodejs_buildpack
+
+ 
