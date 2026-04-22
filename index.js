@@ -37,11 +37,10 @@ async function withRetry(fn, retries = 3, delay = 500) {
 async function callOData(path, options = {}) {
     return withRetry(async () => {
 
-         
         const res = await fetch(`${process.env.APP_URL}${path}`, {
             method: options.method || "GET",
             headers: {
-                "Authorization": `Bearer ${ process.env.BEARER_TOKEN}`,
+                "Authorization": `Bearer ${process.env.BEARER_TOKEN}`,
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             },
@@ -85,13 +84,13 @@ function createServer() {
         { id: z.string() },
         async ({ id }) => {
             const data = await callOData(
-                `/Documents(${id})?$expand=ExtractedInvoice,LineItems`
+                `/Documents(${id})?$expand=invoice($expand=lineItems)`
             );
             return { content: [{ type: "text", text: JSON.stringify(data) }] };
         }
     );
 
-    // 3️⃣ upload_document
+    //3️⃣ upload_document
     server.tool(
         "upload_document",
         "Upload document",
@@ -105,6 +104,34 @@ function createServer() {
         }
     );
 
+    // server.tool(
+    //     "upload_document",
+    //     "Upload document",
+    //     {
+    //         fileContent: z.string(),
+    //         fileName: z.string(),
+    //         schema: z.string(),
+    //         documentType: z.string()
+    //     },
+    //     async ({ fileContent, fileName, schema, documentType }) => {
+
+    //         const data = await callOData(`/uploadDocument`, {
+    //             method: "POST",
+    //             data: {
+    //                 fileContent,
+    //                 fileName,
+    //                 schema,
+    //                 documentType
+    //             }
+    //         });
+
+    //         return {
+    //             content: [{ type: "text", text: data }]
+    //         };
+    //     }
+    // );
+
+
     // 4️⃣ process_document
     server.tool(
         "process_document",
@@ -113,7 +140,7 @@ function createServer() {
         async ({ id }) => {
             const data = await callOData(`/processDocument`, {
                 method: "POST",
-                data: { id }
+                data: { documentId: id }
             });
             return { content: [{ type: "text", text: JSON.stringify(data) }] };
         }
@@ -126,7 +153,7 @@ function createServer() {
         { documentId: z.string() },
         async ({ documentId }) => {
             const data = await callOData(
-                `/AuditLogs?$filter=documentId eq '${documentId}'`
+                `/AuditLogs?$filter=document_ID  eq '${documentId}'`
             );
             return { content: [{ type: "text", text: JSON.stringify(data) }] };
         }
@@ -136,6 +163,109 @@ function createServer() {
        📦 Resources
     ========================= */
 
+server.registerResource(
+    "Processed (PENDING) Documents",
+    "documents://pending",
+  {
+    title: "Processed Documents",
+    description: "List of documents with PENDING status"
+  },
+  async (uri) => {
+    try {
+       const filter = encodeURIComponent("status eq 'PENDING'");
+
+    const data = await callOData(
+      `/Documents?$filter=${filter}`
+    );
+
+      const docs = data.value || [];
+
+      const formatted = docs.length
+        ? docs.map(d => `
+📄 ${d.fileName}
+ID: ${d.ID}
+Status: ${d.status}
+Uploaded By: ${d.uploadedBy || "N/A"}
+Uploaded At: ${d.uploadedAt || "N/A"}
+`).join("\n-------------------\n")
+        : "No processed (PENDING) documents found";
+
+      return {
+        uri: uri.href,
+        name: "documents-pending",
+        title: "Processed Documents",
+        mimeType: "text/plain",
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/plain",
+            text: formatted.trim()
+          }
+        ]
+      };
+
+    } catch (err) {
+      return {
+        uri: uri.href,
+        name: "error",
+        mimeType: "text/plain",
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/plain",
+            text: `Error loading documents: ${err.message}`
+          }
+        ]
+      };
+    }
+  }
+);
+
+    server.resource(
+        "Document Statistics",
+        "documents://stats",
+        async () => {
+            const data = await callOData(
+                `/Documents?$expand=invoice`
+            );
+
+            const docs = data.value || [];
+
+            const total = docs.length;
+
+            // ✅ FIXED STATUS VALUES
+            const processed = docs.filter(d => d.status === "DONE").length;
+            const failed = docs.filter(d => d.status === "FAILED").length;
+
+            const confidences = docs
+                .map(d => d.invoice?.confidence)
+                .filter(c => typeof c === "number");
+
+            const avgConfidence = confidences.length
+                ? (confidences.reduce((a, b) => a + b, 0) / confidences.length).toFixed(2)
+                : "0";
+
+            const summary = `
+📊 Document Statistics
+
+Total Documents: ${total}
+Processed (DONE): ${processed}
+Failed: ${failed}
+Average Confidence: ${avgConfidence}
+`;
+
+            return {
+                contents: [
+                    {
+                        uri: "documents://stats",
+                        text: summary.trim()
+                    }
+                ]
+            };
+        }
+    );
+
+   
 
     return server;
 }
